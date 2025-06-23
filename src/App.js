@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar, Area, ReferenceLine } from 'recharts';
-import { Calculator, Settings, TrendingUp, DollarSign, PiggyBank, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Calculator, Settings, TrendingUp, DollarSign, PiggyBank, Plus, Trash2, ChevronDown, ChevronUp, Briefcase } from 'lucide-react';
 import { addYears, format, parseISO, differenceInMonths, addMonths } from 'date-fns';
 
 const RetirementPlanner = () => {
@@ -8,7 +8,6 @@ const RetirementPlanner = () => {
   const defaultBirthDate = '1991-07-13';
   const [birthDate, setBirthDate] = useState(defaultBirthDate);
   const [currentYear, setCurrentYear] = useState(2025);
-  const [annualIncome, setAnnualIncome] = useState(170000);
   const [incomeGrowthRate, setIncomeGrowthRate] = useState(0.03);
   const [useIncomeGrowth, setUseIncomeGrowth] = useState(false);
   const [federalTaxRate, setFederalTaxRate] = useState(0.22);
@@ -45,7 +44,9 @@ const RetirementPlanner = () => {
     investments: true,
     savings: true,
     expenses: true,
-    additionalIncome: true
+    additionalIncome: true,
+    incomePeriods: true,
+    irregularExpenses: true,
   });
 
   // Add a toggle for showing the first row for today
@@ -64,6 +65,31 @@ const RetirementPlanner = () => {
   // Profiles state
   const [profiles, setProfiles] = useState([]);
   const [selectedProfile, setSelectedProfile] = useState(null);
+
+  const [incomePeriods, setIncomePeriods] = useState([]);
+
+  const [irregularExpenses, setIrregularExpenses] = useState([]);
+  const addIrregularExpense = () => {
+    setIrregularExpenses([
+      ...irregularExpenses,
+      {
+        name: '',
+        amount: 10000,
+        startAge: getCurrentAgeYears(),
+        endAge: getCurrentAgeYears(),
+        frequency: 'one-time',
+        inflate: true,
+      },
+    ]);
+  };
+  const updateIrregularExpense = (index, field, value) => {
+    const updated = [...irregularExpenses];
+    updated[index] = { ...updated[index], [field]: value };
+    setIrregularExpenses(updated);
+  };
+  const removeIrregularExpense = (index) => {
+    setIrregularExpenses(irregularExpenses.filter((_, i) => i !== index));
+  };
 
   const toggleSection = (section) => {
     setExpandedSections(prev => ({
@@ -131,7 +157,7 @@ const RetirementPlanner = () => {
   let todaysExpenses = 0;
   if (applicableExpensePeriodNow) {
     if (applicableExpensePeriodNow.replacementRate) {
-      const baseIncome = annualIncome;
+      const baseIncome = 170000; // fallback default
       todaysExpenses = baseIncome * applicableExpensePeriodNow.replacementRate;
     } else {
       todaysExpenses = applicableExpensePeriodNow.amount;
@@ -142,6 +168,19 @@ const RetirementPlanner = () => {
   const retirementExpenses = todaysExpenses * Math.pow(1 + inflationRate, yearsToRetirement);
   // Calculate FIRE at retirement
   const fireAtRetirement = retirementExpenses / swr;
+
+  // Move this helper function definition up, before useMemo for projectionData
+  const getApplicableIncome = (age) => {
+    return incomePeriods
+      .filter(p => age >= p.startAge && age <= p.endAge)
+      .reduce((sum, period) => {
+        if (period.growthType === 'growth') {
+          const yearsInPeriod = age - period.startAge;
+          return sum + period.amount * Math.pow(1 + period.growthRate, yearsInPeriod);
+        }
+        return sum + period.amount;
+      }, 0);
+  };
 
   const projectionData = useMemo(() => {
     const data = [];
@@ -174,19 +213,21 @@ const RetirementPlanner = () => {
         );
         if (applicableExpensePeriod) {
           if (applicableExpensePeriod.replacementRate) {
-            const baseIncome = annualIncome;
+            const baseIncome = getApplicableIncome(currentAge); // use income period
             currentAnnualExpenses = baseIncome * applicableExpensePeriod.replacementRate;
           } else {
             currentAnnualExpenses = applicableExpensePeriod.amount;
           }
         }
         const currentTotalInvestments = projTaxable + proj401k + projRoth;
+        const currentAnnualIncome = getApplicableIncome(currentAge);
+        const currentTakeHomePay = currentAnnualIncome - (currentAnnualIncome * federalTaxRate) - (currentAnnualIncome * stateTaxRate);
         data.push({
           age: ageDisplay,
           ageYears: ageYears,
           year,
-          annualIncome: annualIncome,
-          takeHomePay: annualIncome * (1 - federalTaxRate - stateTaxRate),
+          annualIncome: currentAnnualIncome,
+          takeHomePay: currentTakeHomePay,
           annualExpenses: currentAnnualExpenses,
           annualSavings: 0,
           totalInvestments: currentTotalInvestments,
@@ -205,12 +246,7 @@ const RetirementPlanner = () => {
 
       let adjustedIncome = 0;
       if (ageYears < retirementAge) {
-        const yearsFromStart = ageYears - Math.floor(getAgeInMonths(startDate, birthDate) / 12);
-        if (useIncomeGrowth) {
-          adjustedIncome = annualIncome * Math.pow(1 + incomeGrowthRate, yearsFromStart) * cumulativeInflation;
-        } else {
-          adjustedIncome = annualIncome * cumulativeInflation;
-        }
+        adjustedIncome = getApplicableIncome(ageYears) * cumulativeInflation;
       }
       
       const federalTax = adjustedIncome * federalTaxRate;
@@ -252,8 +288,8 @@ const RetirementPlanner = () => {
         if (applicableExpensePeriod.replacementRate) {
           const baseIncome = ageYears < retirementAge ? adjustedIncome : 
             (useIncomeGrowth ? 
-              annualIncome * Math.pow(1 + incomeGrowthRate, retirementAge - ageYears) :
-              annualIncome);
+              adjustedIncome * Math.pow(1 + incomeGrowthRate, retirementAge - ageYears) :
+              adjustedIncome);
           monthlyExpenses = (baseIncome * applicableExpensePeriod.replacementRate * cumulativeInflation) / 12;
         } else {
           monthlyExpenses = (applicableExpensePeriod.amount * cumulativeInflation) / 12;
@@ -379,15 +415,33 @@ const RetirementPlanner = () => {
           projTaxable += event.inflate ? event.amount * cumulativeInflation : event.amount;
         }
       });
+
+      // Subtract irregular expenses
+      irregularExpenses.forEach(expense => {
+        if (expense.frequency === 'one-time') {
+          if (ageYears === expense.startAge) {
+            const amount = expense.inflate ? expense.amount * cumulativeInflation : expense.amount;
+            projTaxable -= amount;
+            if (projTaxable < 0) projTaxable = 0;
+          }
+        } else if (expense.frequency === 'annual') {
+          if (ageYears >= expense.startAge && ageYears <= expense.endAge) {
+            const amount = expense.inflate ? expense.amount * cumulativeInflation : expense.amount;
+            projTaxable -= amount;
+            if (projTaxable < 0) projTaxable = 0;
+          }
+        }
+      });
     }
     
     return data;
   }, [
-    birthDate, currentYear, annualIncome, incomeGrowthRate, useIncomeGrowth,
+    birthDate, currentYear, incomeGrowthRate, useIncomeGrowth,
     federalTaxRate, stateTaxRate, inflationRate, retirementAge, lifeExpectancy,
     currentTaxable, current401k, currentRoth, socialSecurityAmount, socialSecurityAge,
-    useAssetClasses, generalReturn, assetClasses, savingsPeriods, expensePeriods,
-    additionalIncome, useIncomeGrowth, showTodayRow, swr, customWithdrawalAnnual
+    useAssetClasses, generalReturn, assetClasses, savingsPeriods, expensePeriods, incomePeriods,
+    additionalIncome, useIncomeGrowth, showTodayRow, swr, customWithdrawalAnnual,
+    irregularExpenses,
   ]);
 
   // Set initial values or update startAge when birthDate changes
@@ -541,7 +595,6 @@ const RetirementPlanner = () => {
     name,
     birthDate,
     currentYear,
-    annualIncome,
     incomeGrowthRate,
     useIncomeGrowth,
     federalTaxRate,
@@ -571,7 +624,6 @@ const RetirementPlanner = () => {
   const loadProfile = (profile) => {
     setBirthDate(profile.birthDate);
     setCurrentYear(profile.currentYear);
-    setAnnualIncome(profile.annualIncome);
     setIncomeGrowthRate(profile.incomeGrowthRate);
     setUseIncomeGrowth(profile.useIncomeGrowth);
     setFederalTaxRate(profile.federalTaxRate);
@@ -611,6 +663,413 @@ const RetirementPlanner = () => {
     setSelectedProfile(name);
     const profile = profiles.find(p => p.name === name);
     if (profile) loadProfile(profile);
+  };
+
+  const addIncomePeriod = () => {
+    const lastPeriod = incomePeriods[incomePeriods.length - 1];
+    const newStartAge = lastPeriod ? lastPeriod.endAge : getCurrentAgeYears();
+    setIncomePeriods([
+      ...incomePeriods,
+      {
+        startAge: newStartAge,
+        endAge: retirementAge,
+        amount: 170000, // fallback default
+        growthType: 'fixed',
+        growthRate: 0.03,
+      },
+    ]);
+  };
+
+  const updateIncomePeriod = (index, field, value) => {
+    const updated = [...incomePeriods];
+    updated[index] = { ...updated[index], [field]: value };
+    setIncomePeriods(updated);
+  };
+
+  const removeIncomePeriod = (index) => {
+    setIncomePeriods(incomePeriods.filter((_, i) => i !== index));
+  };
+
+  // On first load, migrate old annualIncome to incomePeriods if empty
+  useEffect(() => {
+    if (incomePeriods.length === 0) {
+      setIncomePeriods([
+        {
+          startAge: getCurrentAgeYears(),
+          endAge: retirementAge,
+          amount: 170000, // fallback default
+          growthType: 'fixed',
+          growthRate: 0.03,
+        },
+      ]);
+    }
+    // eslint-disable-next-line
+  }, [retirementAge]);
+
+  // Add Monte Carlo simulation state at the top of the component
+  const [mcMean, setMcMean] = useState(0.07);
+  const [mcStdev, setMcStdev] = useState(0.15);
+  const [mcRuns, setMcRuns] = useState(1000);
+  const [mcResults, setMcResults] = useState(null);
+  const [mcLoading, setMcLoading] = useState(false);
+  // In Monte Carlo simulation logic, store all simulation paths for each year
+  const [mcPercentiles, setMcPercentiles] = useState(null);
+
+  // Monte Carlo simulation logic
+  const runMonteCarlo = () => {
+    setMcLoading(true);
+    setTimeout(() => {
+      const results = [];
+      let successCount = 0;
+      let endingBalances = [];
+      const allPaths = [];
+      for (let i = 0; i < mcRuns; i++) {
+        let projTaxable = currentTaxable;
+        let proj401k = current401k;
+        let projRoth = currentRoth;
+        let cumulativeInflation = 1;
+        let failed = false;
+        const userBirthDate = parseISO(birthDate);
+        const startDate = new Date();
+        const lifeExpectancyMonths = (lifeExpectancy * 12);
+        const endDate = addMonths(userBirthDate, lifeExpectancyMonths);
+        const monthsToProject = differenceInMonths(endDate, startDate);
+        const path = [];
+        for (let m = 0; m <= monthsToProject; m++) {
+          const currentDate = addMonths(startDate, m);
+          const ageInMonths = differenceInMonths(currentDate, birthDate);
+          const ageYears = Math.floor(ageInMonths / 12);
+          if (m % 12 === 0 && m > 0) cumulativeInflation *= (1 + inflationRate);
+          // Random return for this month
+          const annualReturn = mcMean + mcStdev * randn_bm();
+          const monthlyReturn = Math.pow(1 + annualReturn, 1/12) - 1;
+          const currentReturn = ageYears < retirementAge ? monthlyReturn : retirementReturn / 12;
+          const totalInvestments = projTaxable + proj401k + projRoth;
+          const growthAmount = totalInvestments * currentReturn;
+          if (totalInvestments > 0) {
+            const taxableGrowth = (projTaxable / totalInvestments) * growthAmount;
+            const traditional401kGrowth = (proj401k / totalInvestments) * growthAmount;
+            const rothGrowth = (projRoth / totalInvestments) * growthAmount;
+            projTaxable += taxableGrowth;
+            proj401k += traditional401kGrowth;
+            projRoth += rothGrowth;
+          }
+          // Income, expenses, savings, withdrawals, additional income, irregular expenses
+          let adjustedIncome = 0;
+          if (ageYears < retirementAge) {
+            adjustedIncome = getApplicableIncome(ageYears) * cumulativeInflation;
+          }
+          const federalTax = adjustedIncome * federalTaxRate;
+          const stateTax = adjustedIncome * stateTaxRate;
+          const takeHomePay = adjustedIncome - federalTax - stateTax;
+          const applicableSavingsPeriod = savingsPeriods.find(period => ageYears >= period.startAge && ageYears <= period.endAge);
+          let monthlySavings = 0;
+          if (applicableSavingsPeriod && ageYears < retirementAge) {
+            const isPercent = applicableSavingsPeriod.amountType === 'percent';
+            if (isPercent) {
+              const percent = applicableSavingsPeriod.amount;
+              monthlySavings = (takeHomePay * percent) / 12;
+            } else {
+              const yearsInPeriod = ageYears - applicableSavingsPeriod.startAge;
+              let baseAmount = applicableSavingsPeriod.amount;
+              if (applicableSavingsPeriod.growthType === 'growth' && yearsInPeriod > 0) {
+                baseAmount = applicableSavingsPeriod.amount * Math.pow(1 + applicableSavingsPeriod.growthRate, yearsInPeriod);
+              }
+              if (applicableSavingsPeriod.growthType === 'growth') {
+                monthlySavings = (baseAmount * cumulativeInflation) / 12;
+              } else {
+                monthlySavings = baseAmount / 12;
+              }
+            }
+          }
+          const applicableExpensePeriod = expensePeriods.find(period => ageYears >= period.startAge && ageYears <= period.endAge);
+          let monthlyExpenses = 0;
+          if (applicableExpensePeriod) {
+            if (applicableExpensePeriod.replacementRate) {
+              const baseIncome = ageYears < retirementAge ? adjustedIncome : adjustedIncome;
+              monthlyExpenses = (baseIncome * applicableExpensePeriod.replacementRate * cumulativeInflation) / 12;
+            } else {
+              monthlyExpenses = (applicableExpensePeriod.amount * cumulativeInflation) / 12;
+            }
+          } else {
+            monthlyExpenses = 0;
+          }
+          let totalAdditionalIncome = 0;
+          additionalIncome.forEach(income => {
+            if (income.type === 'annual' && ageYears >= income.startAge && ageYears <= income.endAge) {
+              totalAdditionalIncome += (income.amount * cumulativeInflation) / 12;
+            } else if (income.type === 'one-time' && ageYears === income.startAge && ageInMonths % 12 === 0) {
+              totalAdditionalIncome += income.inflate ? income.amount * cumulativeInflation : income.amount;
+            }
+          });
+          // Subtract irregular expenses
+          irregularExpenses.forEach(expense => {
+            if (expense.frequency === 'one-time') {
+              if (ageYears === expense.startAge) {
+                const amount = expense.inflate ? expense.amount * cumulativeInflation : expense.amount;
+                projTaxable -= amount;
+                if (projTaxable < 0) projTaxable = 0;
+              }
+            } else if (expense.frequency === 'annual') {
+              if (ageYears >= expense.startAge && ageYears <= expense.endAge) {
+                const amount = expense.inflate ? expense.amount * cumulativeInflation : expense.amount;
+                projTaxable -= amount;
+                if (projTaxable < 0) projTaxable = 0;
+              }
+            }
+          });
+          // Add new monthly savings after growth
+          if (monthlySavings > 0) {
+            proj401k += monthlySavings * 0.7;
+            projTaxable += monthlySavings * 0.3;
+          }
+          // Withdrawals (if retired)
+          let withdrawals = 0;
+          let taxesOnWithdrawals = 0;
+          if (ageYears >= retirementAge) {
+            const flatTaxRate = federalTaxRate + stateTaxRate;
+            const neededIncome = monthlyExpenses - totalAdditionalIncome;
+            if (neededIncome > 0) {
+              withdrawals = neededIncome / (1 - flatTaxRate);
+              taxesOnWithdrawals = withdrawals * flatTaxRate;
+            }
+          }
+          if (withdrawals > 0) {
+            const totalAfterGrowth = projTaxable + proj401k + projRoth;
+            if (totalAfterGrowth > 0) {
+              const withdrawalRatio = withdrawals / totalAfterGrowth;
+              projTaxable -= projTaxable * withdrawalRatio;
+              proj401k -= proj401k * withdrawalRatio;
+              projRoth -= projRoth * withdrawalRatio;
+            }
+          }
+          // If portfolio is depleted, mark as failed
+          if (projTaxable + proj401k + projRoth <= 0) {
+            failed = true;
+            break;
+          }
+          // Store annual value for percentiles, ensuring alignment with projectionData
+          if (showTodayRow) {
+            if (m % 12 === 0) {
+              path.push({
+                ageYears,
+                value: projTaxable + proj401k + projRoth
+              });
+            }
+          } else {
+            const month = currentDate.getMonth(); // 0-indexed for January
+            if (month === 0) {
+              path.push({
+                ageYears,
+                value: projTaxable + proj401k + projRoth
+              });
+            }
+          }
+        }
+        if (!failed) successCount++;
+        endingBalances.push(projTaxable + proj401k + projRoth);
+        allPaths.push(path);
+      }
+      setMcResults({
+        successRate: (successCount / mcRuns) * 100,
+        median: median(endingBalances),
+        min: Math.min(...endingBalances),
+        max: Math.max(...endingBalances),
+      });
+      // Calculate percentiles for each year
+      const years = allPaths[0]?.map(p => p.ageYears) || [];
+      const percentiles = years.map((age, idx) => {
+        const values = allPaths.map(path => path[idx]?.value ?? 0);
+        return {
+          ageYears: age,
+          p10: quantile(values, 0.1),
+          p50: quantile(values, 0.5),
+          p90: quantile(values, 0.9),
+        };
+      });
+      setMcPercentiles(percentiles);
+      // console.log('Monte Carlo Percentiles:', percentiles);
+      setMcLoading(false);
+    }, 100);
+  };
+
+  const yAxisMax = useMemo(() => {
+    if (!projectionData || projectionData.length === 0) return 100000;
+  
+    const maxDeterministic = Math.max(...projectionData.map(d => d.totalInvestments));
+    const maxMC = (mcPercentiles && mcPercentiles.length > 0) 
+      ? Math.max(...mcPercentiles.map(d => d.p90))
+      : 0;
+      
+    return Math.max(maxDeterministic, maxMC) * 1.05; // 5% padding
+  }, [projectionData, mcPercentiles]);
+
+  const chartData = useMemo(() => {
+    if (!projectionData) return [];
+
+    return projectionData.map(projRow => {
+      const mcRow = mcPercentiles?.find(mc => mc.ageYears === projRow.ageYears);
+      return {
+        ...projRow,
+        p10: mcRow?.p10,
+        p50: mcRow?.p50,
+        p90: mcRow?.p90,
+      };
+    });
+  }, [projectionData, mcPercentiles]);
+
+  // Helper for normal distribution
+  function randn_bm() {
+    let u = 0, v = 0;
+    while(u === 0) u = Math.random();
+    while(v === 0) v = Math.random();
+    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  }
+  function median(arr) {
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  function quantile(arr, q) {
+    const sorted = [...arr].sort((a, b) => a - b);
+    const pos = (sorted.length - 1) * q;
+    const base = Math.floor(pos);
+    const rest = pos - base;
+    if (sorted[base + 1] !== undefined) {
+      return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+    } else {
+      return sorted[base];
+    }
+  }
+
+  const ChartComponent = () => {
+    const CustomTooltip = ({ active, payload, label }) => {
+      if (active && payload && payload.length) {
+        // We need to find the mcRow for this label (age)
+        const mcRow = mcPercentiles?.find(p => p.ageYears === label);
+        
+        return (
+          <div className="p-3 bg-white rounded-lg shadow-lg border border-gray-200">
+            <p className="font-semibold text-gray-800 mb-2">{`Age: ${label}`}</p>
+            {/* Show deterministic value from the main chart's payload */}
+            {payload[0].dataKey === 'totalInvestments' && (
+              <p style={{ color: payload[0].color }} className="font-medium">
+                {`${payload[0].name}: $${payload[0].value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+              </p>
+            )}
+            
+            {/* Show MC values by looking them up */}
+            {mcRow && (
+              <>
+                <p style={{ color: '#ef4444' }} className="font-medium">
+                  {`10th Percentile: $${mcRow.p10.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                </p>
+                <p style={{ color: '#2563eb' }} className="font-medium">
+                  {`Median: $${mcRow.p50.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                </p>
+                <p style={{ color: '#22c55e' }} className="font-medium">
+                  {`90th Percentile: $${mcRow.p90.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                </p>
+              </>
+            )}
+          </div>
+        );
+      }
+      return null;
+    };
+
+    return (
+      <div style={{ position: 'relative', width: '100%', height: 340 }}>
+        <ResponsiveContainer width="100%" height={340}>
+          <LineChart data={chartData} margin={{ top: 40, right: 30, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="ageYears" stroke="#6b7280" tickFormatter={v => `${v}`} />
+            <YAxis tickFormatter={formatYAxis} stroke="#6b7280" domain={[0, yAxisMax]} allowDataOverflow />
+            <Legend verticalAlign="top" height={36} payload={[
+                { value: 'Total Investments (Deterministic)', type: 'line', id: 'totalInvestments', color: '#3b82f6' },
+                ...((mcPercentiles && mcPercentiles.length > 0) ? [
+                  { value: '10th Percentile (MC)', type: 'line', id: 'p10', color: '#ef4444' },
+                  { value: 'Median (MC)', type: 'line', id: 'p50', color: '#2563eb' },
+                  { value: '90th Percentile (MC)', type: 'line', id: 'p90', color: '#22c55e' },
+                ] : [])
+            ]}/>
+            <defs>
+              <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
+                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#cbd5e1', strokeWidth: 1 }} />
+            <Area type="monotone" dataKey="totalInvestments" stroke="none" fill="url(#portfolioFill)" />
+            <Line type="monotone" dataKey="totalInvestments" stroke="#3b82f6" strokeWidth={3} name="Total Investments (Deterministic)" dot={false} />
+            
+            {/* Monte Carlo Percentile Bands */}
+            {mcPercentiles && mcPercentiles.length > 0 && (
+              <>
+                <Line type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={2} name="10th Percentile (MC)" dot={false} />
+                <Line type="monotone" dataKey="p50" stroke="#2563eb" strokeWidth={2} name="Median (MC)" dot={false} />
+                <Line type="monotone" dataKey="p90" stroke="#22c55e" strokeWidth={2} name="90th Percentile (MC)" dot={false} />
+              </>
+            )}
+            
+            <ReferenceLine x={retirementAge} stroke="#6366f1" strokeDasharray="2 2" label={{ value: 'Retirement', position: 'top', fill: '#6366f1', fontWeight: 600 }} />
+            {(() => {
+              const fireRow = chartData.find(d => d.totalInvestments >= d.fireNumber);
+              return fireRow ? (
+                <ReferenceLine x={fireRow.ageYears} stroke="#22c55e" strokeDasharray="2 2" label={{ value: 'FIRE', position: 'top', fill: '#22c55e', fontWeight: 600 }} />
+              ) : null;
+            })()}
+            {(() => {
+              const coastRow = chartData.find(d => d.totalInvestments >= d.coastFIRE);
+              return coastRow ? (
+                <ReferenceLine x={coastRow.ageYears} stroke="#f59e0b" strokeDasharray="2 2" label={{ value: 'Coast FIRE', position: 'top', fill: '#f59e0b', fontWeight: 600 }} />
+              ) : null;
+            })()}
+            {additionalIncome.filter(inc => inc.type === 'one-time').map((event, idx) => (
+              <ReferenceLine
+                key={idx}
+                x={event.startAge}
+                stroke="#0ea5e9"
+                strokeDasharray="2 2"
+                label={{
+                  value: event.name ? `${event.name} ($${event.amount.toLocaleString()})` : `One-Time ($${event.amount.toLocaleString()})`,
+                  position: idx % 2 === 0 ? 'top' : 'bottom',
+                  fill: '#0ea5e9',
+                  fontWeight: 600,
+                  fontSize: 12
+                }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+        
+        {/* Overlay Monte Carlo Chart */}
+        {mcPercentiles && mcPercentiles.length > 0 && (
+          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={mcPercentiles}
+                margin={{ top: 40, right: 30, left: 0, bottom: 0 }}
+                syncId="portfolioChart"
+              >
+                <XAxis dataKey="ageYears" hide />
+                <YAxis hide domain={[0, yAxisMax]} allowDataOverflow />
+                <Line type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={2} name="10th Percentile (MC)" dot={false} />
+                <Line type="monotone" dataKey="p50" stroke="#2563eb" strokeWidth={2} name="Median (MC)" dot={false} />
+                <Line type="monotone" dataKey="p90" stroke="#22c55e" strokeWidth={2} name="90th Percentile (MC)" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Placeholder text if no simulation is run */}
+        {(!mcPercentiles || mcPercentiles.length === 0) && (
+          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center', color: '#6b7280' }}>
+            <p>Run a Monte Carlo simulation to see percentile bands.</p>
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Place the profile dropdown and create button above the header
@@ -688,41 +1147,6 @@ const RetirementPlanner = () => {
                   onChange={(e) => setBirthDate(e.target.value)}
                   className="form-input"
                 />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Annual Income</label>
-                <input
-                  type="number"
-                  value={annualIncome}
-                  onChange={(e) => setAnnualIncome(Number(e.target.value))}
-                  className="form-input"
-                  min="0"
-                  step="1000"
-                />
-              </div>
-              <div className="form-group">
-                <label className="flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useIncomeGrowth}
-                    onChange={(e) => setUseIncomeGrowth(e.target.checked)}
-                    className="form-checkbox mr-3"
-                  />
-                  <span className="text-sm font-medium">Income grows annually</span>
-                </label>
-                {useIncomeGrowth && (
-                  <div className="mt-3">
-                    <label className="form-label">Annual Growth Rate</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={incomeGrowthRate}
-                      onChange={(e) => setIncomeGrowthRate(Number(e.target.value))}
-                      className="form-input"
-                      placeholder="0.03 = 3%"
-                    />
-                  </div>
-                )}
               </div>
               <div className="form-group">
                 <label className="form-label">Retirement Age</label>
@@ -905,15 +1329,12 @@ const RetirementPlanner = () => {
       </div>
 
       {/* Investment Returns */}
-      <div className="card mb-8">
-        <div 
-          className="card-header cursor-pointer"
-          onClick={() => toggleSection('investments')}
-        >
+      <div className="card">
+        <div className="card-header cursor-pointer" onClick={() => toggleSection('investments')}>
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <div className="bg-primary-100 p-2 rounded-lg mr-3">
-                <TrendingUp className="w-5 h-5 text-primary-600" />
+              <div className="bg-indigo-100 p-2 rounded-lg mr-3">
+                <TrendingUp className="w-5 h-5 text-indigo-600" />
               </div>
               <h3 className="text-lg font-semibold text-gray-800">Investment Returns</h3>
             </div>
@@ -921,7 +1342,7 @@ const RetirementPlanner = () => {
           </div>
         </div>
         {expandedSections.investments && (
-          <div className="card-body">
+          <div className="card-body space-y-4">
             <div className="mb-6">
               <label className="flex items-center cursor-pointer">
                 <input
@@ -1015,12 +1436,224 @@ const RetirementPlanner = () => {
                 </button>
               </div>
             )}
+            {/* Monte Carlo controls and results */}
+            <div className="mt-6">
+              <div className="font-semibold text-lg mb-2">Monte Carlo Simulation</div>
+              <div className="flex flex-wrap gap-2 items-center mb-2">
+                <label className="text-xs">Mean Return</label>
+                <input type="number" step="0.001" value={mcMean} onChange={e => setMcMean(Number(e.target.value))} className="form-input w-20" />
+                <label className="text-xs">Stdev</label>
+                <input type="number" step="0.001" value={mcStdev} onChange={e => setMcStdev(Number(e.target.value))} className="form-input w-20" />
+                <label className="text-xs">Runs</label>
+                <input type="number" step="1" value={mcRuns} onChange={e => setMcRuns(Number(e.target.value))} className="form-input w-20" />
+                <button className="btn btn-primary btn-sm" onClick={runMonteCarlo} disabled={mcLoading}>{mcLoading ? 'Running...' : 'Run Simulation'}</button>
+              </div>
+              {mcResults && (
+                <div className="flex flex-wrap gap-8 items-center">
+                  <div className="text-lg font-semibold">Probability of Success: <span className="text-success-600">{mcResults.successRate.toFixed(1)}%</span></div>
+                  <div className="text-sm text-gray-700">Median Ending Balance: <span className="font-mono">${mcResults.median.toLocaleString(undefined, {maximumFractionDigits:0})}</span></div>
+                  <div className="text-sm text-gray-700">Min: <span className="font-mono">${mcResults.min.toLocaleString(undefined, {maximumFractionDigits:0})}</span></div>
+                  <div className="text-sm text-gray-700">Max: <span className="font-mono">${mcResults.max.toLocaleString(undefined, {maximumFractionDigits:0})}</span></div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
 
-      {/* Savings & Expenses */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      {/* Income, Expenses, & Savings */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        {/* Income Periods */}
+        <div className="card">
+          <div className="card-header cursor-pointer" onClick={() => toggleSection('incomePeriods')}>
+            <div className="flex items-center">
+              <div className="bg-warning-100 p-2 rounded-lg mr-3">
+                <Briefcase className="w-5 h-5 text-warning-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Income</h3>
+            </div>
+          </div>
+          {expandedSections.incomePeriods && (
+            <div className="card-body">
+              {incomePeriods.map((period, index) => (
+                <div key={index} className="card mb-4">
+                  <div className="card-body">
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label className="form-label">Start Age</label>
+                        <input
+                          type="number"
+                          value={period.startAge}
+                          onChange={e => updateIncomePeriod(index, 'startAge', Number(e.target.value))}
+                          className="form-input"
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">End Age</label>
+                        <input
+                          type="number"
+                          value={period.endAge}
+                          onChange={e => updateIncomePeriod(index, 'endAge', Number(e.target.value))}
+                          className="form-input"
+                        />
+                      </div>
+                    </div>
+                    <div className="form-group flex items-center gap-2">
+                      <label className="form-label">Annual Amount</label>
+                      <input
+                        type="number"
+                        value={period.amount}
+                        onChange={e => updateIncomePeriod(index, 'amount', Number(e.target.value))}
+                        className="form-input w-32"
+                        min="0"
+                        step="any"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Growth Type</label>
+                      <select
+                        value={period.growthType}
+                        onChange={e => updateIncomePeriod(index, 'growthType', e.target.value)}
+                        className="form-input form-select"
+                      >
+                        <option value="fixed">Fixed Amount</option>
+                        <option value="growth">Grows Annually</option>
+                      </select>
+                    </div>
+                    {period.growthType === 'growth' && (
+                      <div className="form-group">
+                        <label className="form-label">Annual Growth Rate</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={period.growthRate}
+                          onChange={e => updateIncomePeriod(index, 'growthRate', Number(e.target.value))}
+                          className="form-input w-32"
+                          placeholder="0.03 = 3%"
+                        />
+                      </div>
+                    )}
+                    <div className="flex justify-end mt-4">
+                      <button
+                        onClick={() => removeIncomePeriod(index)}
+                        className="btn btn-danger btn-sm"
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <button
+                onClick={addIncomePeriod}
+                className="btn btn-warning"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add Income Period
+              </button>
+            </div>
+          )}
+        </div>
+        {/* Expense Periods */}
+        <div className="card">
+          <div className="card-header cursor-pointer" onClick={() => toggleSection('expenses')}>
+            <div className="flex items-center">
+              <div className="bg-rose-100 p-2 rounded-lg mr-3">
+                <DollarSign className="w-5 h-5 text-rose-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Expenses</h3>
+            </div>
+          </div>
+          {expandedSections.expenses && (
+            <div className="card-body">
+              {expensePeriods.map((period, index) => (
+                <div key={index} className="card mb-4">
+                  <div className="card-body">
+                    <div className="grid grid-cols-2 gap-3 mb-3">
+                      <div>
+                        <label className="form-label">Start Age</label>
+                        <input
+                          type="number"
+                          value={period.startAge}
+                          onChange={(e) => updateExpensePeriod(index, 'startAge', Number(e.target.value))}
+                          className="form-input"
+                        />
+                      </div>
+                      <div>
+                        <label className="form-label">End Age</label>
+                        <input
+                          type="number"
+                          value={period.endAge}
+                          onChange={(e) => updateExpensePeriod(index, 'endAge', Number(e.target.value))}
+                          className="form-input"
+                        />
+                      </div>
+                    </div>
+                    {period.replacementRate ? (
+                      <div className="form-group">
+                        <label className="form-label">Replacement Rate (% of income)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={period.replacementRate}
+                          onChange={(e) => updateExpensePeriod(index, 'replacementRate', Number(e.target.value))}
+                          className="form-input"
+                          min="0"
+                          max="2"
+                        />
+                      </div>
+                    ) : (
+                      <div className="form-group">
+                        <label className="form-label">Annual Amount <span className='text-xs text-gray-500'>(in today's dollars)</span></label>
+                        <input
+                          type="number"
+                          value={period.amount}
+                          onChange={(e) => updateExpensePeriod(index, 'amount', Number(e.target.value))}
+                          className="form-input"
+                        />
+                      </div>
+                    )}
+                    <div className="form-group">
+                      <label className="form-label">Type</label>
+                      <select
+                        value={period.replacementRate ? 'replacement' : 'fixed'}
+                        onChange={(e) => updateExpensePeriodType(index, e.target.value)}
+                        className="form-input form-select"
+                      >
+                        <option value="fixed">Fixed Amount</option>
+                        <option value="replacement">Income Replacement</option>
+                      </select>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {period.replacementRate ? 
+                        `${(period.replacementRate * 100).toFixed(0)}% of income from age ${period.startAge} to ${period.endAge}` :
+                        `$${period.amount?.toLocaleString()} annually from age ${period.startAge} to ${period.endAge} (Increases by inflation)`
+                      }
+                    </div>
+                    <div className="flex justify-end mt-4">
+                      <button
+                        onClick={() => removeExpensePeriod(index)}
+                        className="btn btn-danger btn-sm"
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              
+              <button
+                onClick={addExpensePeriod}
+                className="btn bg-rose-600 text-white"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Add Expense Period
+              </button>
+            </div>
+          )}
+        </div>
         {/* Savings Periods */}
         <div className="card">
           <div 
@@ -1180,109 +1813,6 @@ const RetirementPlanner = () => {
             </div>
           )}
         </div>
-
-        {/* Expense Periods */}
-        <div className="card">
-          <div 
-            className="card-header cursor-pointer"
-            onClick={() => toggleSection('expenses')}
-          >
-            <div className="flex items-center">
-              <div className="bg-warning-100 p-2 rounded-lg mr-3">
-                <DollarSign className="w-5 h-5 text-warning-600" />
-              </div>
-              <h3 className="text-lg font-semibold text-gray-800">Expenses</h3>
-            </div>
-          </div>
-          {expandedSections.expenses && (
-            <div className="card-body">
-              {expensePeriods.map((period, index) => (
-                <div key={index} className="card mb-4">
-                  <div className="card-body">
-                    <div className="grid grid-cols-2 gap-3 mb-3">
-                      <div>
-                        <label className="form-label">Start Age</label>
-                        <input
-                          type="number"
-                          value={period.startAge}
-                          onChange={(e) => updateExpensePeriod(index, 'startAge', Number(e.target.value))}
-                          className="form-input"
-                        />
-                      </div>
-                      <div>
-                        <label className="form-label">End Age</label>
-                        <input
-                          type="number"
-                          value={period.endAge}
-                          onChange={(e) => updateExpensePeriod(index, 'endAge', Number(e.target.value))}
-                          className="form-input"
-                        />
-                      </div>
-                    </div>
-                    {period.replacementRate ? (
-                      <div className="form-group">
-                        <label className="form-label">Replacement Rate (% of income)</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={period.replacementRate}
-                          onChange={(e) => updateExpensePeriod(index, 'replacementRate', Number(e.target.value))}
-                          className="form-input"
-                          min="0"
-                          max="2"
-                        />
-                      </div>
-                    ) : (
-                      <div className="form-group">
-                        <label className="form-label">Annual Amount <span className='text-xs text-gray-500'>(in today's dollars)</span></label>
-                        <input
-                          type="number"
-                          value={period.amount}
-                          onChange={(e) => updateExpensePeriod(index, 'amount', Number(e.target.value))}
-                          className="form-input"
-                        />
-                      </div>
-                    )}
-                    <div className="form-group">
-                      <label className="form-label">Type</label>
-                      <select
-                        value={period.replacementRate ? 'replacement' : 'fixed'}
-                        onChange={(e) => updateExpensePeriodType(index, e.target.value)}
-                        className="form-input form-select"
-                      >
-                        <option value="fixed">Fixed Amount</option>
-                        <option value="replacement">Income Replacement</option>
-                      </select>
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {period.replacementRate ? 
-                        `${(period.replacementRate * 100).toFixed(0)}% of income from age ${period.startAge} to ${period.endAge}` :
-                        `$${period.amount?.toLocaleString()} annually from age ${period.startAge} to ${period.endAge} (Increases by inflation)`
-                      }
-                    </div>
-                    <div className="flex justify-end mt-4">
-                      <button
-                        onClick={() => removeExpensePeriod(index)}
-                        className="btn btn-danger btn-sm"
-                      >
-                        <Trash2 className="w-4 h-4 mr-1" />
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              
-              <button
-                onClick={addExpensePeriod}
-                className="btn btn-warning"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Add Expense Period
-              </button>
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Income Sources */}
@@ -1295,15 +1825,15 @@ const RetirementPlanner = () => {
             <div className="bg-primary-100 p-2 rounded-lg mr-3">
               <DollarSign className="w-5 h-5 text-primary-600" />
             </div>
-            <h3 className="text-lg font-semibold text-gray-800">Income Sources</h3>
+            <h3 className="text-lg font-semibold text-gray-800">Additional Income Sources</h3>
           </div>
           <button
             onClick={e => { e.stopPropagation(); addAdditionalIncome(); }}
             className="btn btn-primary btn-sm flex items-center gap-1"
-            title="Add Income Source"
+            title="Add Additional Income Source"
           >
             <Plus className="w-4 h-4" />
-            Add Income Source
+            Add Additional Income Source
           </button>
         </div>
         {expandedSections.additionalIncome && (
@@ -1469,7 +1999,7 @@ const RetirementPlanner = () => {
                       let monthlyExpenses = 0;
                       if (applicableExpensePeriod) {
                         if (applicableExpensePeriod.replacementRate) {
-                          const baseIncome = annualIncome;
+                          const baseIncome = 170000; // fallback default
                           monthlyExpenses = (baseIncome * applicableExpensePeriod.replacementRate) / 12;
                         } else {
                           monthlyExpenses = applicableExpensePeriod.amount / 12;
@@ -1501,7 +2031,7 @@ const RetirementPlanner = () => {
                       let annualExpenses = 0;
                       if (applicableExpensePeriod) {
                         if (applicableExpensePeriod.replacementRate) {
-                          const baseIncome = annualIncome;
+                          const baseIncome = 170000; // fallback default
                           annualExpenses = baseIncome * applicableExpensePeriod.replacementRate;
                         } else {
                           annualExpenses = applicableExpensePeriod.amount;
@@ -1534,7 +2064,7 @@ const RetirementPlanner = () => {
                     if (applicableExpensePeriod) {
                       if (applicableExpensePeriod.replacementRate) {
                         // If already retired, base income is not job income
-                        const baseIncome = isRetired ? 0 : annualIncome;
+                        const baseIncome = isRetired ? 0 : 170000;
                         annualExpenses = baseIncome * applicableExpensePeriod.replacementRate;
                       } else {
                         annualExpenses = applicableExpensePeriod.amount;
@@ -1633,6 +2163,105 @@ const RetirementPlanner = () => {
         )}
       </div>
       
+      {/* Irregular Expenses */}
+      <div 
+        className="card mb-8"
+        onClick={() => toggleSection('irregularExpenses')}
+      >
+        <div className="card-header">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <div className="bg-danger-100 p-2 rounded-lg mr-3">
+                <DollarSign className="w-5 h-5 text-danger-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Irregular Expenses</h3>
+            </div>
+            <button
+              onClick={e => { e.stopPropagation(); addIrregularExpense(); }}
+              className="btn btn-danger btn-sm flex items-center gap-1"
+              title="Add Irregular Expense"
+            >
+              <Plus className="w-4 h-4" />
+              Add Irregular Expense
+            </button>
+          </div>
+        </div>
+        {expandedSections.irregularExpenses && (
+          <div className="card-body">
+            {irregularExpenses.map((expense, index) => (
+              <div key={index} className="flex items-center justify-between bg-danger-50 rounded p-3 mb-2">
+                <div className="flex flex-col gap-1">
+                  <input
+                    type="text"
+                    value={expense.name}
+                    onChange={e => updateIrregularExpense(index, 'name', e.target.value)}
+                    className="form-input w-40 mb-1"
+                    placeholder="Expense Name"
+                  />
+                  <div className="flex gap-2 items-center">
+                    <span className="text-xs text-gray-500">Start Age:</span>
+                    <input
+                      type="number"
+                      value={expense.startAge}
+                      onChange={e => updateIrregularExpense(index, 'startAge', Number(e.target.value))}
+                      className="form-input w-16 text-xs py-1 px-2"
+                    />
+                    <span className="text-xs text-gray-500">End Age:</span>
+                    <input
+                      type="number"
+                      value={expense.endAge}
+                      onChange={e => updateIrregularExpense(index, 'endAge', Number(e.target.value))}
+                      className="form-input w-16 text-xs py-1 px-2"
+                      disabled={expense.frequency === 'one-time'}
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-6">
+                  <div className="flex flex-col items-end">
+                    <label className="text-xs text-gray-500">Amount</label>
+                    <input
+                      type="number"
+                      value={expense.amount}
+                      onChange={e => updateIrregularExpense(index, 'amount', Number(e.target.value))}
+                      className="form-input w-24 text-right"
+                      min="0"
+                      step="any"
+                    />
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <label className="text-xs text-gray-500">Frequency</label>
+                    <select
+                      value={expense.frequency}
+                      onChange={e => updateIrregularExpense(index, 'frequency', e.target.value)}
+                      className="form-input form-select w-24 text-xs"
+                    >
+                      <option value="one-time">One-Time</option>
+                      <option value="annual">Annual</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <label className="text-xs text-gray-500">Inflation Adjust</label>
+                    <input
+                      type="checkbox"
+                      checked={!!expense.inflate}
+                      onChange={e => updateIrregularExpense(index, 'inflate', e.target.checked)}
+                      className="form-checkbox mt-2"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeIrregularExpense(index)}
+                  className="btn btn-danger btn-xs ml-4"
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      
       {/* Charts */}
       <div className="mb-8">
         {/* Portfolio Growth Over Time (full width) */}
@@ -1641,63 +2270,7 @@ const RetirementPlanner = () => {
             <h3 className="text-xl font-semibold text-gray-800">Portfolio Growth Over Time</h3>
           </div>
           <div className="card-body">
-            <ResponsiveContainer width="100%" height={340}>
-              <LineChart data={projectionData} margin={{ top: 40, right: 30, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="ageYears" stroke="#6b7280" tickFormatter={v => `${v}`} />
-                <YAxis tickFormatter={formatYAxis} stroke="#6b7280" />
-                <Legend verticalAlign="top" height={36} />
-                <defs>
-                  <linearGradient id="portfolioFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2}/>
-                    <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <Area type="monotone" dataKey="totalInvestments" stroke="none" fill="url(#portfolioFill)" />
-                <Line type="monotone" dataKey="totalInvestments" stroke="#3b82f6" strokeWidth={3} name="Total Investments" dot={false} />
-                <Line type="monotone" dataKey="fireNumber" stroke="#22c55e" strokeWidth={2} name="FIRE Number" strokeDasharray="6 3" dot={false} />
-                <Line type="monotone" dataKey="coastFIRE" stroke="#f59e0b" strokeWidth={2} name="Coast FIRE" strokeDasharray="4 4" dot={false} />
-                <ReferenceLine x={retirementAge} stroke="#6366f1" strokeDasharray="2 2" label={{ value: 'Retirement', position: 'top', fill: '#6366f1', fontWeight: 600 }} />
-                {(() => {
-                  const fireRow = projectionData.find(d => d.totalInvestments >= d.fireNumber);
-                  return fireRow ? (
-                    <ReferenceLine x={fireRow.ageYears} stroke="#22c55e" strokeDasharray="2 2" label={{ value: 'FIRE', position: 'top', fill: '#22c55e', fontWeight: 600 }} />
-                  ) : null;
-                })()}
-                {(() => {
-                  const coastRow = projectionData.find(d => d.totalInvestments >= d.coastFIRE);
-                  return coastRow ? (
-                    <ReferenceLine x={coastRow.ageYears} stroke="#f59e0b" strokeDasharray="2 2" label={{ value: 'Coast FIRE', position: 'top', fill: '#f59e0b', fontWeight: 600 }} />
-                  ) : null;
-                })()}
-                {/* Staggered ReferenceLines for one-time events */}
-                {additionalIncome.filter(inc => inc.type === 'one-time').map((event, idx) => (
-                  <ReferenceLine
-                    key={idx}
-                    x={event.startAge}
-                    stroke="#0ea5e9"
-                    strokeDasharray="2 2"
-                    label={{
-                      value: event.name ? `${event.name} ($${event.amount.toLocaleString()})` : `One-Time ($${event.amount.toLocaleString()})`,
-                      position: idx % 2 === 0 ? 'top' : 'bottom',
-                      fill: '#0ea5e9',
-                      fontWeight: 600,
-                      fontSize: 12
-                    }}
-                  />
-                ))}
-                <Tooltip
-                  formatter={(value, name) => [`$${Number(value).toLocaleString()}`, name]}
-                  labelFormatter={label => `Age: ${label}`}
-                  contentStyle={{
-                    backgroundColor: 'white',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '8px',
-                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
-                  }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
+            <ChartComponent />
           </div>
         </div>
         {/* Income vs Expenses (full width, below) */}
@@ -1920,34 +2493,50 @@ const RetirementPlanner = () => {
             </button>
           </div>
           <div className="overflow-x-auto">
-            <table className="table w-full">
-              <thead>
+            <table className="w-full text-sm text-left text-gray-500">
+              <thead className="text-xs text-gray-700 uppercase bg-gray-50">
                 <tr>
-                  <th className="sticky top-0 bg-white z-10">Age</th>
-                  <th className="sticky top-0 bg-white z-10">Income</th>
-                  <th className="sticky top-0 bg-white z-10">Take Home</th>
-                  <th className="sticky top-0 bg-white z-10">Expenses</th>
-                  <th className="sticky top-0 bg-white z-10">Savings</th>
-                  <th className="sticky top-0 bg-white z-10">Total Investments</th>
-                  <th className="sticky top-0 bg-white z-10">Coast FIRE Number</th>
-                  <th className="sticky top-0 bg-white z-10">FIRE Number</th>
-                  <th className="sticky top-0 bg-white z-10">Additional Income</th>
-                  <th className="sticky top-0 bg-white z-10">Retirement Income</th>
+                  <th scope="col" className="px-6 py-3">Age</th>
+                  <th scope="col" className="px-6 py-3">Year</th>
+                  <th scope="col" className="px-6 py-3">Annual Income</th>
+                  <th scope="col" className="px-6 py-3">Annual Expenses</th>
+                  <th scope="col" className="px-6 py-3">Annual Savings</th>
+                  <th scope="col" className="px-6 py-3">Total Investments</th>
+                  {mcPercentiles && mcPercentiles.length > 0 && (
+                    <>
+                      <th scope="col" className="px-6 py-3 bg-blue-50">10th Percentile (MC)</th>
+                      <th scope="col" className="px-6 py-3 bg-blue-50">Median (MC)</th>
+                      <th scope="col" className="px-6 py-3 bg-blue-50">90th Percentile (MC)</th>
+                    </>
+                  )}
+                  <th scope="col" className="px-6 py-3">FIRE Number</th>
+                  <th scope="col" className="px-6 py-3">Coast FIRE</th>
+                  <th scope="col" className="px-6 py-3">Retirement Income</th>
+                  <th scope="col" className="px-6 py-3">Withdrawals</th>
+                  <th scope="col" className="px-6 py-3">Taxes on Withdrawals</th>
                 </tr>
               </thead>
               <tbody>
-                {projectionData.map((row, index) => (
-                  <tr key={index} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                    <td className="font-medium">{row.age}</td>
-                    <td>${row.annualIncome.toLocaleString()}</td>
-                    <td>${row.takeHomePay.toLocaleString()}</td>
-                    <td>${row.annualExpenses.toLocaleString()}</td>
-                    <td>${row.annualSavings.toLocaleString()}</td>
-                    <td className="font-semibold">${row.totalInvestments.toLocaleString()}</td>
-                    <td>${row.coastFIRE.toLocaleString()}</td>
-                    <td>${row.fireNumber.toLocaleString()}</td>
-                    <td>${row.additionalIncome.toLocaleString()}</td>
-                    <td>${row.retirementIncome.toLocaleString()}</td>
+                {chartData.map((d, i) => (
+                  <tr key={i} className="bg-white border-b hover:bg-gray-50">
+                    <td className="px-6 py-4">{d.age}</td>
+                    <td className="px-6 py-4">{d.year}</td>
+                    <td className="px-6 py-4">${d.annualIncome.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.annualExpenses.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.annualSavings.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4 font-semibold text-gray-900">${d.totalInvestments.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    {mcPercentiles && mcPercentiles.length > 0 && (
+                      <>
+                        <td className="px-6 py-4 bg-blue-50">${(d.p10 || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                        <td className="px-6 py-4 bg-blue-50">${(d.p50 || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                        <td className="px-6 py-4 bg-blue-50">${(d.p90 || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                      </>
+                    )}
+                    <td className="px-6 py-4">${d.fireNumber.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.coastFIRE.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.retirementIncome.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.withdrawals.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
+                    <td className="px-6 py-4">${d.taxesOnWithdrawals.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1955,6 +2544,38 @@ const RetirementPlanner = () => {
           </div>
         </div>
       </div>
+      
+      {/* Monte Carlo Simulation Chart */}
+      {mcPercentiles && mcPercentiles.length > 0 && (
+        <div className="card mb-8">
+          <div className="card-header">
+            <h3 className="text-xl font-semibold text-gray-800">Monte Carlo Simulation Results</h3>
+          </div>
+          <div className="card-body">
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={mcPercentiles} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="ageYears" stroke="#6b7280" tickFormatter={v => `${v}`} />
+                <YAxis tickFormatter={formatYAxis} stroke="#6b7280" />
+                <Tooltip
+                  formatter={(value, name) => [`$${Number(value).toLocaleString()}`, name]}
+                  labelFormatter={label => `Age: ${label}`}
+                  contentStyle={{
+                    backgroundColor: 'white',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '8px',
+                    boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'
+                  }}
+                />
+                <Legend />
+                <Line type="monotone" dataKey="p10" stroke="#ef4444" strokeWidth={2} name="10th Percentile" dot={false} />
+                <Line type="monotone" dataKey="p50" stroke="#2563eb" strokeWidth={2} name="Median (50th)" dot={false} />
+                <Line type="monotone" dataKey="p90" stroke="#22c55e" strokeWidth={2} name="90th Percentile" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

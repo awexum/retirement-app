@@ -1,4 +1,8 @@
 /* Modern Design System for Retirement App */
+/* Tailwind CSS */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* CSS Custom Properties for consistent theming */
 :root {
